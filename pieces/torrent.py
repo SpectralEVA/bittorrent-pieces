@@ -1,5 +1,10 @@
+import hashlib
+
+from pieces.bencoding import encode
+
+
 class Torrent:
-    def __init__(self, meta_info: dict):
+    def __init__(self, meta_info: dict[bytes, object]):
         """
         Wraps bdecoded torrent metadata into a clean, queryable object.
         Handles both Single-File and Multi-File structures automatically.
@@ -32,6 +37,21 @@ class Torrent:
         else:
             raise ValueError("Malformed torrent file: metadata contains neither length nor files.")
 
+    @property
+    def info_hash(self) -> bytes:
+        """20-byte SHA-1 digest of the canonical bencoded ``info`` dictionary."""
+        return hashlib.sha1(encode(self.meta_info[b"info"])).digest()
+
+    @property
+    def piece_hashes(self) -> list[bytes]:
+        """Individual 20-byte SHA-1 piece hashes extracted from ``pieces``."""
+        return [self.pieces[i : i + 20] for i in range(0, len(self.pieces), 20)]
+
+    @property
+    def num_pieces(self) -> int:
+        """Total number of piece hashes in this torrent."""
+        return len(self.pieces) // 20
+
     def __str__(self) -> str:
         """A simple printer format so you can see object details easily"""
         return (
@@ -39,5 +59,5 @@ class Torrent:
             f"Tracker URL:  {self.announce}\n"
             f"Total Size:   {self.total_length} bytes\n"
             f"Piece Size:   {self.piece_length} bytes\n"
-            f"Total Pieces: {len(self.pieces) // 20}"
+            f"Total Pieces: {self.num_pieces}"
         )

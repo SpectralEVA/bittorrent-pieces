@@ -1,3 +1,41 @@
+def encode(obj: int | str | bytes | list | dict) -> bytes:
+    """
+    Recursively encode a Python object into canonical bencode bytes.
+
+    Dictionary keys are sorted lexicographically by their raw byte value
+    before encoding, as required by BEP 3 for info-hash computation.
+    """
+    if isinstance(obj, bool):
+        raise TypeError("Booleans are not valid bencode integers.")
+    if isinstance(obj, int):
+        return b"i" + str(obj).encode("ascii") + b"e"
+    if isinstance(obj, str):
+        return encode(obj.encode("utf-8"))
+    if isinstance(obj, bytes):
+        return str(len(obj)).encode("ascii") + b":" + obj
+    if isinstance(obj, list):
+        return b"l" + b"".join(encode(item) for item in obj) + b"e"
+    if isinstance(obj, dict):
+        normalized: dict[bytes, int | str | bytes | list | dict] = {}
+        for key, value in obj.items():
+            if isinstance(key, str):
+                key = key.encode("utf-8")
+            elif not isinstance(key, bytes):
+                raise TypeError(
+                    f"Dictionary keys must be str or bytes, got {type(key).__name__}"
+                )
+            normalized[key] = value
+
+        parts = [b"d"]
+        for key in sorted(normalized.keys()):
+            parts.append(encode(key))
+            parts.append(encode(normalized[key]))
+        parts.append(b"e")
+        return b"".join(parts)
+
+    raise TypeError(f"Unsupported type for bencoding: {type(obj).__name__}")
+
+
 class Decoder:
     """
     A modern Python 3.11+ Bencoding decoder.
