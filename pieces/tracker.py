@@ -7,11 +7,19 @@ from urllib.request import Request, urlopen
 
 from pieces.bencoding import Decoder
 
+DEFAULT_ANNOUNCE_INTERVAL = 300
+
 
 @dataclass(frozen=True, slots=True)
 class Peer:
     host: str
     port: int
+
+
+@dataclass(frozen=True, slots=True)
+class AnnounceResult:
+    peers: list[Peer]
+    interval: int = DEFAULT_ANNOUNCE_INTERVAL
 
 
 def _parse_compact_peers(peers: bytes) -> list[Peer]:
@@ -27,7 +35,7 @@ def _parse_compact_peers(peers: bytes) -> list[Peer]:
     return result
 
 
-def _decode_tracker_response(data: bytes) -> list[Peer]:
+def _decode_tracker_response(data: bytes) -> AnnounceResult:
     decoded = Decoder(data).decode()
     if not isinstance(decoded, dict):
         raise ValueError("Tracker response must be a bencoded dictionary.")
@@ -44,7 +52,10 @@ def _decode_tracker_response(data: bytes) -> list[Peer]:
     if not isinstance(peers, bytes):
         raise ValueError("Tracker peers field must be a compact byte string.")
 
-    return _parse_compact_peers(peers)
+    interval_raw = decoded.get(b"interval", DEFAULT_ANNOUNCE_INTERVAL)
+    interval = int(interval_raw) if isinstance(interval_raw, int) else DEFAULT_ANNOUNCE_INTERVAL
+
+    return AnnounceResult(peers=_parse_compact_peers(peers), interval=interval)
 
 
 def announce(
@@ -53,19 +64,23 @@ def announce(
     peer_id: bytes,
     port: int,
     left: int,
-) -> list[Peer]:
+    uploaded: int = 0,
+    downloaded: int = 0,
+    event: str | None = "started",
+) -> AnnounceResult:
     encoded_hash = quote_from_bytes(info_hash)
     encoded_peer_id = quote_from_bytes(peer_id)
     url = (
         f"{tracker_url}?info_hash={encoded_hash}"
         f"&peer_id={encoded_peer_id}"
         f"&port={port}"
-        f"&uploaded=0"
-        f"&downloaded=0"
+        f"&uploaded={uploaded}"
+        f"&downloaded={downloaded}"
         f"&left={left}"
         f"&compact=1"
-        f"&event=started"
     )
+    if event is not None:
+        url += f"&event={event}"
 
     request = Request(url, method="GET")
 

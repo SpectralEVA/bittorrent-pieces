@@ -2,6 +2,8 @@ import hashlib
 import threading
 from pathlib import Path
 
+import pytest
+
 from pieces.pieces_manager import BLOCK_SIZE, PieceManager
 from pieces.torrent import Torrent
 
@@ -132,9 +134,56 @@ def test_write_to_storage_spans_file_boundary(tmp_path: Path) -> None:
     assert file_two[50:] == b"\x00" * 50
 
 
+def test_piece_manager_resumes_verified_pieces_on_disk(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    piece_one = b"A" * BLOCK_SIZE
+    piece_two = b"B" * BLOCK_SIZE
+    torrent = _build_torrent(
+        piece_length=BLOCK_SIZE,
+        piece_data_list=[piece_one, piece_two],
+        total_length=BLOCK_SIZE * 2,
+    )
+
+    output_file = tmp_path / "resume.bin"
+    first_pass = PieceManager(torrent, str(output_file))
+    assert first_pass.handle_block(0, 0, piece_one) is True
+    assert first_pass.have == {0}
+
+    resumed = PieceManager(torrent, str(output_file))
+    assert resumed.have == {0}
+    assert not resumed.is_complete
+    assert resumed.bytes_left() == BLOCK_SIZE
+
+    captured = capsys.readouterr()
+    assert "Found 1/2 verified pieces on disk" in captured.out
+    assert "Resuming download from 50.0%" in captured.out
+
+    assert resumed.handle_block(1, 0, piece_two) is True
+    assert resumed.is_complete
+
+
+def test_piece_manager_does_not_wipe_existing_file_on_resume(tmp_path: Path) -> None:
+    piece_data = b"KEEP" * 4000
+    torrent = _build_torrent(
+        piece_length=BLOCK_SIZE,
+        piece_data_list=[piece_data],
+        total_length=len(piece_data),
+    )
+
+    output_file = tmp_path / "preserve.bin"
+    first_pass = PieceManager(torrent, str(output_file))
+    assert first_pass.handle_block(0, 0, piece_data) is True
+
+    on_disk = output_file.read_bytes()
+    resumed = PieceManager(torrent, str(output_file))
+    assert resumed.is_complete
+    assert output_file.read_bytes() == on_disk
+
+
 def test_concurrent_handle_block_is_thread_safe(tmp_path: Path) -> None:
     piece_count = 8
-    piece_data_list = [bytes([index]) * BLOCK_SIZE for index in range(piece_count)]
+    piece_data_list = [bytes([index + 1]) * BLOCK_SIZE for index in range(piece_count)]
     torrent = _build_torrent(
         piece_length=BLOCK_SIZE,
         piece_data_list=piece_data_list,

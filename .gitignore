@@ -11,4 +11,5 @@ ENV/
 # Windows system files
 Thumbs.db
 ehthumbs.db
-Desktop.ini
+Desktop.inidebian_download
+*.torrent

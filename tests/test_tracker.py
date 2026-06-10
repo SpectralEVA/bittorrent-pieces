@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 from pieces.bencoding import encode
-from pieces.tracker import Peer, _decode_tracker_response, announce
+from pieces.tracker import AnnounceResult, Peer, _decode_tracker_response, announce
 
 
 def _compact_peer(ip: str, port: int) -> bytes:
@@ -22,10 +22,13 @@ def test_compact_peer_parsing() -> None:
 
     parsed = _decode_tracker_response(response)
 
-    assert parsed == [
-        Peer(host="192.168.1.1", port=6881),
-        Peer(host="10.0.0.5", port=51413),
-    ]
+    assert parsed == AnnounceResult(
+        peers=[
+            Peer(host="192.168.1.1", port=6881),
+            Peer(host="10.0.0.5", port=51413),
+        ],
+        interval=1800,
+    )
 
     with patch("pieces.tracker.urlopen") as mock_urlopen:
         mock_urlopen.return_value = BytesIO(response)
@@ -45,6 +48,8 @@ def test_compact_peer_parsing() -> None:
     assert "peer_id=" in called_url
     assert "compact=1" in called_url
     assert "event=started" in called_url
+    assert "downloaded=0" in called_url
+    assert "uploaded=0" in called_url
 
 
 def test_tracker_failure_reason_raises_runtime_error() -> None:

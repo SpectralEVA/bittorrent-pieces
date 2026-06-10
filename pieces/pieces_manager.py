@@ -26,6 +26,7 @@ class PieceManager:
         self._lock = threading.Lock()
         self._file_entries = self._build_file_layout()
         self._allocate_storage()
+        self._scan_existing_pieces()
 
     def _build_file_layout(self) -> list[FileEntry]:
         if not self.torrent.is_multi_file:
@@ -58,15 +59,47 @@ class PieceManager:
     def _allocate_storage(self) -> None:
         if not self.torrent.is_multi_file:
             self.output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(self.output_path, "wb") as file:
-                file.truncate(self.torrent.total_length)
+            if self.output_path.exists():
+                with open(self.output_path, "r+b") as file:
+                    file.seek(0, os.SEEK_END)
+                    if file.tell() < self.torrent.total_length:
+                        file.truncate(self.torrent.total_length)
+            else:
+                with open(self.output_path, "wb") as file:
+                    file.truncate(self.torrent.total_length)
             return
 
         os.makedirs(self.output_path, exist_ok=True)
         for entry in self._file_entries:
             entry.path.parent.mkdir(parents=True, exist_ok=True)
-            with open(entry.path, "wb") as file:
-                file.truncate(entry.length)
+            if entry.path.exists():
+                with open(entry.path, "r+b") as file:
+                    file.seek(0, os.SEEK_END)
+                    if file.tell() < entry.length:
+                        file.truncate(entry.length)
+            else:
+                with open(entry.path, "wb") as file:
+                    file.truncate(entry.length)
+
+    def _scan_existing_pieces(self) -> None:
+        verified = 0
+        with self._lock:
+            for piece_index in range(self.torrent.num_pieces):
+                piece_size = self.piece_size(piece_index)
+                global_offset = piece_index * self.torrent.piece_length
+                piece_data = self._read_from_storage(global_offset, piece_size)
+                expected_hash = self.torrent.piece_hashes[piece_index]
+                if hashlib.sha1(piece_data).digest() == expected_hash:
+                    self.have.add(piece_index)
+                    verified += 1
+
+        total = self.torrent.num_pieces
+        if verified > 0:
+            percent = (verified / total) * 100 if total else 0.0
+            print(
+                f"Found {verified}/{total} verified pieces on disk. "
+                f"Resuming download from {percent:.1f}%..."
+            )
 
     @property
     def is_complete(self) -> bool:
@@ -76,6 +109,13 @@ class PieceManager:
     def completed_piece_count(self) -> int:
         with self._lock:
             return len(self.have)
+
+    def downloaded_bytes(self) -> int:
+        with self._lock:
+            return sum(self.piece_size(index) for index in self.have)
+
+    def bytes_left(self) -> int:
+        return self.torrent.total_length - self.downloaded_bytes()
 
     def piece_size(self, piece_index: int) -> int:
         if piece_index < 0 or piece_index >= self.torrent.num_pieces:
@@ -157,6 +197,33 @@ class PieceManager:
             del self.pending_blocks[piece_index]
             self.requested.pop(piece_index, None)
             return True
+
+    def _read_from_storage(self, global_offset: int, length: int) -> bytes:
+        buffer = bytearray()
+        remaining = length
+        cursor = global_offset
+
+        while remaining > 0:
+            entry = self._entry_for_offset(cursor)
+            if entry is None:
+                raise ValueError(f"Global offset {cursor} is outside torrent data.")
+
+            local_offset = cursor - entry.offset
+            readable = min(remaining, entry.length - local_offset)
+
+            with open(entry.path, "rb") as file:
+                file.seek(local_offset)
+                chunk = file.read(readable)
+                if len(chunk) != readable:
+                    raise ValueError(
+                        f"Expected {readable} bytes at offset {cursor}, got {len(chunk)}."
+                    )
+                buffer.extend(chunk)
+
+            remaining -= readable
+            cursor += readable
+
+        return bytes(buffer)
 
     def _write_to_storage(self, global_offset: int, data: bytes) -> None:
         remaining = data
